@@ -73,10 +73,10 @@ tasks:
     - kubectl --context={{.CONTEXT}} apply -f https://github.com/knative/operator/releases/download/knative-{{.KNATIVE_VERSION}}/operator.yaml
     - kubectl --context={{.CONTEXT}} wait --for=condition=available --timeout=5m deploy/knative-operator
     - kubectl --context={{.CONTEXT}} apply -f manifests/knative/serving.yml
-    - echo "wait for serving custom resources" && sleep 5
+    - echo "wait for serving custom resources..." && sleep 10
     - kubectl --context={{.CONTEXT}} wait --for=condition=available --timeout=5m -n knative-serving deploy --all
-    - echo "wait for eventing custom resources" && sleep 5
     - kubectl --context={{.CONTEXT}} apply -f manifests/knative/eventing.yml
+    - echo "wait for eventing custom resources..." && sleep 10
     - kubectl --context={{.CONTEXT}} wait --for=condition=available --timeout=5m -n knative-eventing deploy --all
   
   install:
@@ -94,7 +94,7 @@ tasks:
     desc: load test hello world app
     cmds:
     - |
-      # Send 60 seconds of traffic maintaining 100 in-flight requests.
-      hey -z 60s -c 100 \
+      # Send 30 seconds of traffic maintaining 100 in-flight requests.
+      hey -z 30s -c 100 \
         -H "Host: hello-world.default.example.com" http://localhost:80 \
         && kubectl get pods
