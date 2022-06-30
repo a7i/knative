@@ -1,0 +1,100 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  K8S_VERSION: "v1.24.2"
+  KNATIVE_VERSION: "v1.5.0"
+  NAME: "knative"
+  ISTIO_VERSION: "1.14.1"
+  CONTEXT: "kind-knative"
+
+tasks:
+  default:
+    cmds:
+      - task -l
+    silent: true
+
+  kind:
+    desc: create a kind cluster
+    cmds:
+    - kind create cluster --image kindest/node:{{.K8S_VERSION}} --name {{.NAME}} --config manifests/kind/config.yml
+
+  context:
+    desc: set kubernetes context to use kind
+    cmds:
+    - kubectl config use-context {{.CONTEXT}}
+  
+  install:kn:
+    desc: install kn cli
+    cmds:
+    - brew install knative/client/kn
+
+  install:hey:
+    desc: install hey cli
+    cmds:
+    - brew install hey
+
+  install:istioctl:
+    desc: Downloads Istioctl in $HOME/bin
+    cmds:
+    - ISTIO_ALREADY_INSTALLED=$(command -v istioctl) && if [[ $ISTIO_ALREADY_INSTALLED ]]; then echo istioctl is already installed; else curl -L https://istio.io/downloadIstio | ISTIO_VERSION={{.ISTIO_VERSION}} TARGET_ARCH=x86_64 sh - && mv istio-{{.ISTIO_VERSION}}/bin/istioctl $HOME/bin && rm -r istio-{{.ISTIO_VERSION}}; fi
+
+  install:istio:
+    desc: Installs Istio using the default profile
+    cmds:
+    - istioctl --context={{.CONTEXT}} apply -f manifests/istio/profile.yml -y
+    - kubectl --context={{.CONTEXT}} wait --for=condition=available --timeout=5m -n istio-system deploy --all
+
+  install:kafka:
+    desc: Install Kafka and Zookeeper
+    cmds:
+    - helm repo add bitnami https://charts.bitnami.com/bitnami
+    - |
+      helm upgrade --install zookeeper bitnami/zookeeper \
+        --create-namespace --namespace zookeeper \
+        --set replicaCount=1 \
+        --set auth.enabled=false \
+        --set allowAnonymousLogin=true \
+        --wait --atomic --timeout 5m \
+        --kube-context={{.CONTEXT}}
+    - | 
+      helm upgrade --install kafka bitnami/kafka \
+        --create-namespace --namespace kafka \
+        --set zookeeper.enabled=false \
+        --set replicaCount=1 \
+        --set externalZookeeper.servers=zookeeper.zookeeper.svc.cluster.local \
+        --wait --atomic --timeout 5m --debug \
+        --kube-context={{.CONTEXT}}
+
+  install:knative:
+    desc: install knative using operator
+    cmds:
+    - kubectl --context={{.CONTEXT}} apply -f https://github.com/knative/operator/releases/download/knative-{{.KNATIVE_VERSION}}/operator.yaml
+    - kubectl --context={{.CONTEXT}} wait --for=condition=available --timeout=5m deploy/knative-operator
+    - kubectl --context={{.CONTEXT}} apply -f manifests/knative/serving.yml
+    - echo "wait for serving custom resources" && sleep 5
+    - kubectl --context={{.CONTEXT}} wait --for=condition=available --timeout=5m -n knative-serving deploy --all
+    - echo "wait for eventing custom resources" && sleep 5
+    - kubectl --context={{.CONTEXT}} apply -f manifests/knative/eventing.yml
+    - kubectl --context={{.CONTEXT}} wait --for=condition=available --timeout=5m -n knative-eventing deploy --all
+  
+  install:
+    desc: install everything
+    deps: [context, install:istioctl, install:istio, install:kafka, install:knative]
+
+  deploy:
+    desc: deploy hello world knative service
+    cmds:
+    - kn service apply -f manifests/knative/helloworld.yml
+    - kn service list
+    - curl -H "Host: hello-world.default.example.com" http://localhost:80
+
+  hey:
+    desc: load test hello world app
+    cmds:
+    - |
+      # Send 60 seconds of traffic maintaining 100 in-flight requests.
+      hey -z 60s -c 100 \
+        -H "Host: hello-world.default.example.com" http://localhost:80 \
+        && kubectl get pods
